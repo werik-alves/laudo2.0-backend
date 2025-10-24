@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  let token = req.cookies?.auth_token;
+  let token = req.headers.authorization;
 
   // Também aceita Authorization: Bearer <token>
   if (!token) {

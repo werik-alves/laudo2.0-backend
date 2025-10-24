@@ -53,7 +53,8 @@ export async function login(req: Request, res: Response) {
 }
 
 export async function me(req: Request, res: Response) {
-  const token = req.cookies?.auth_token;
+  const token = req.headers.authorization;
+  console.log(token);
   if (!token) return res.status(401).json({ error: "Unauthenticated" });
 
   try {
