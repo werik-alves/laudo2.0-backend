@@ -13,13 +13,7 @@ import glpiRouter from "./routes/glpi"; // novo
 const app = express();
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4000;
 
-app.use(
-  cors({
-    origin: process.env.FRONTEND_ORIGIN || "http://localhost:3001",
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  })
-);
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
