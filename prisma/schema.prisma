@@ -1,0 +1,79 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Loja {
+  id        Int      @id @default(autoincrement())
+  nome      String   @unique @db.VarChar(255)
+  createdAt DateTime @default(now())
+}
+
+model Setor {
+  id        Int      @id @default(autoincrement())
+  nome      String   @unique @db.VarChar(255)
+  createdAt DateTime @default(now())
+}
+
+model Equipamento {
+  id        Int      @id @default(autoincrement())
+  nome      String   @unique @db.VarChar(255)
+  modelos   Modelo[]
+  createdAt DateTime @default(now())
+}
+
+model Modelo {
+  id            Int         @id @default(autoincrement())
+  nome          String      @db.VarChar(255)
+  equipamentoId Int
+  equipamento   Equipamento @relation(fields: [equipamentoId], references: [id])
+  createdAt     DateTime    @default(now())
+
+  @@unique([nome, equipamentoId])
+}
+
+model Usuario {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique @db.VarChar(255)
+  isAdmin   Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+enum EstadoEquipamento {
+  FUNCIONANDO
+  NAO_FUNCIONANDO
+}
+
+enum Necessidade {
+  SUBSTITUIDO
+  ENVIAR_CONSERTO
+  DESCARTADO
+}
+
+model InfoLaudo {
+  id                Int                @id @default(autoincrement())
+  numeroChamado     String
+  tecnico           String
+  equipamento       String
+  modelo            String
+  loja              String
+  setor             String
+  tombo             String
+  data              String
+  testesRealizados  String?
+  diagnostico       String?
+  estadoEquipamento EstadoEquipamento?
+  necessidade       Necessidade?
+  createdAt         DateTime           @default(now())
+  createdByUsername String?
+}
