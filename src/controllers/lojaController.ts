@@ -38,10 +38,7 @@ export async function create(req: Request, res: Response) {
     const loja = await prisma.loja.create({ data: { nome: nomeTrim } });
     return res.status(201).json(loja);
   } catch (err) {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2002"
-    ) {
+    if ((err as any)?.code === "P2002") {
       return res.status(409).json({ error: "Loja já cadastrada" });
     }
     console.error("Erro ao criar loja:", err);
@@ -64,13 +61,12 @@ export async function update(req: Request, res: Response) {
     });
     return res.status(200).json(loja);
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError) {
-      if (err.code === "P2025") {
-        return res.status(404).json({ error: "Loja não encontrada" });
-      }
-      if (err.code === "P2002") {
-        return res.status(409).json({ error: "Já existe loja com esse nome" });
-      }
+    const code = (err as any)?.code;
+    if (code === "P2025") {
+      return res.status(404).json({ error: "Loja não encontrada" });
+    }
+    if (code === "P2002") {
+      return res.status(409).json({ error: "Já existe loja com esse nome" });
     }
     console.error("Erro ao atualizar loja:", err);
     return res.status(500).json({ error: "Erro interno" });
@@ -85,7 +81,7 @@ export async function remove(req: Request, res: Response) {
     await prisma.loja.delete({ where: { id } });
     return res.status(204).send();
   } catch (err) {
-    if ((err as Prisma.PrismaClientKnownRequestError)?.code === "P2025") {
+    if ((err as any)?.code === "P2025") {
       return res.status(404).json({ error: "Loja não encontrada" });
     }
     console.error("Erro ao excluir loja:", err);

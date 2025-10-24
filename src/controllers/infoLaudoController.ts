@@ -132,7 +132,7 @@ export async function list(req: Request, res: Response) {
         return new Date(yN, mN - 1, dN, hN, minN);
       };
 
-      const laudosFiltrados = laudos.filter((l) => {
+      const laudosFiltrados = laudos.filter((l: any) => {
         const dt = parseBrDateTimeToDate(l.data);
         return dt && dt >= start && dt <= end;
       });

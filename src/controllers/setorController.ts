@@ -23,10 +23,7 @@ export async function create(req: Request, res: Response) {
     const setor = await prisma.setor.create({ data: { nome: nomeTrim } });
     return res.status(201).json(setor);
   } catch (err) {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2002"
-    ) {
+    if ((err as any)?.code === "P2002") {
       return res.status(409).json({ error: "Setor já cadastrado" });
     }
     console.error("Erro ao criar setor:", err);
@@ -43,11 +40,12 @@ export async function removeById(req: Request, res: Response) {
     await prisma.setor.delete({ where: { id: Number(id) } });
     return res.status(204).send();
   } catch (err) {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2025"
-    ) {
+    const code = (err as any)?.code;
+    if (code === "P2025") {
       return res.status(404).json({ error: "Setor não encontrado" });
+    }
+    if (code === "P2002") {
+      return res.status(409).json({ error: "Já existe setor com esse nome" });
     }
     console.error("Erro ao deletar setor:", err);
     return res.status(500).json({ error: "Erro interno" });
@@ -72,13 +70,12 @@ export async function update(req: Request, res: Response) {
     });
     return res.status(200).json(setor);
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError) {
-      if (err.code === "P2025") {
-        return res.status(404).json({ error: "Setor não encontrado" });
-      }
-      if (err.code === "P2002") {
-        return res.status(409).json({ error: "Já existe setor com esse nome" });
-      }
+    const code = (err as any)?.code;
+    if (code === "P2025") {
+      return res.status(404).json({ error: "Setor não encontrado" });
+    }
+    if (code === "P2002") {
+      return res.status(409).json({ error: "Já existe setor com esse nome" });
     }
     console.error("Erro ao atualizar setor:", err);
     return res.status(500).json({ error: "Erro interno" });

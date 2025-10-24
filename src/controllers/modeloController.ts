@@ -34,10 +34,7 @@ export async function create(req: Request, res: Response) {
     });
     return res.status(201).json(modelo);
   } catch (err) {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2002"
-    ) {
+    if ((err as any)?.code === "P2002") {
       return res
         .status(409)
         .json({ error: "Modelo já cadastrado para esse equipamento" });
@@ -83,15 +80,14 @@ export async function update(req: Request, res: Response) {
     const modelo = await prisma.modelo.update({ where: { id }, data });
     return res.status(200).json(modelo);
   } catch (err: any) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError) {
-      if (err.code === "P2025") {
-        return res.status(404).json({ error: "Modelo não encontrado" });
-      }
-      if (err.code === "P2002") {
-        return res
-          .status(409)
-          .json({ error: "Modelo já existe para esse equipamento" });
-      }
+    const code = (err as any)?.code;
+    if (code === "P2025") {
+      return res.status(404).json({ error: "Modelo não encontrado" });
+    }
+    if (code === "P2002") {
+      return res
+        .status(409)
+        .json({ error: "Modelo já existe para esse equipamento" });
     }
     console.error("Erro ao atualizar modelo:", err);
     return res.status(500).json({ error: "Erro interno" });
@@ -106,10 +102,7 @@ export async function remove(req: Request, res: Response) {
     await prisma.modelo.delete({ where: { id } });
     return res.status(204).send();
   } catch (err: any) {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2025"
-    ) {
+    if ((err as any)?.code === "P2025") {
       return res.status(404).json({ error: "Modelo não encontrado" });
     }
     console.error("Erro ao remover modelo:", err);
