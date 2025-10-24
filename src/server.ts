@@ -18,14 +18,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-app.options(
-  "*",
-  cors({
-    origin: process.env.FRONTEND_ORIGIN || "http://localhost:3001",
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  })
-);
+app.options("*", cors());
 
 // Substitui handlers inline por routers
 app.use("/auth", authRouter);
