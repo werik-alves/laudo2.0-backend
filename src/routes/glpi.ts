@@ -291,4 +291,56 @@ router.post("/ticket/assign", requireAuth, async (req, res) => {
       .json({ error: err?.message || "Erro interno ao atribuir usuário" });
   }
 });
+router.get("/metrics", requireAuth, async (_req, res) => {
+  try {
+    const { getGlpiMetrics } = await import("../services/glpi");
+    const data = getGlpiMetrics();
+    return res.status(200).json(data);
+  } catch (err: any) {
+    console.error("Erro GLPI metrics:", err);
+    return res
+      .status(500)
+      .json({ error: err?.message || "Erro interno ao obter métricas" });
+  }
+});
+router.post("/metrics/reset", requireAuth, async (_req, res) => {
+  try {
+    const { resetGlpiMetrics } = await import("../services/glpi");
+    resetGlpiMetrics();
+    return res.status(200).json({ success: true });
+  } catch (err: any) {
+    console.error("Erro GLPI metrics reset:", err);
+    return res
+      .status(500)
+      .json({ error: err?.message || "Erro interno ao resetar métricas" });
+  }
+});
+router.post("/session/clear", requireAuth, async (req, res) => {
+  try {
+    const { clearGlpiSessionCache } = await import("../services/glpi");
+    const username = (req.body?.username ?? "").toString().trim();
+    const all = Boolean(req.body?.all);
+    const result = clearGlpiSessionCache(all ? undefined : username || undefined);
+    return res.status(200).json({ success: true, ...result });
+  } catch (err: any) {
+    console.error("Erro GLPI session clear:", err);
+    return res
+      .status(500)
+      .json({ error: err?.message || "Erro interno ao limpar sessão" });
+  }
+});
+router.post("/session/kill", requireAuth, async (req, res) => {
+  try {
+    const { killGlpiSession } = await import("../services/glpi");
+    const username = (req.body?.username ?? "").toString().trim();
+    if (!username) return res.status(400).json({ error: "username é obrigatório" });
+    const result = await killGlpiSession(username);
+    return res.status(200).json(result);
+  } catch (err: any) {
+    console.error("Erro GLPI session kill:", err);
+    return res
+      .status(500)
+      .json({ error: err?.message || "Erro interno ao encerrar sessão" });
+  }
+});
 export default router;

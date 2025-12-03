@@ -5,6 +5,24 @@ const GLPI_BASE_URL =
 const GLPI_APP_TOKEN =
   process.env.GLPI_APP_TOKEN || "90MIxmLN3yzkpMpPUJIRPrGwGqa3YVwqiEW2Fraf";
 
+const SESSION_TTL_MS = Number(process.env.GLPI_SESSION_TTL_MS || 10 * 60 * 1000);
+const sessionCache = new Map<string, { token: string; expiresAt: number }>();
+const pendingInit = new Map<string, Promise<string>>();
+const metrics = {
+  initSessions: 0,
+  sessionCacheHits: 0,
+  sessionCacheMisses: 0,
+  pendingInitWaits: 0,
+  retries401: {
+    followup: 0,
+    followupHeader: 0,
+    createTicket: 0,
+    linkTickets: 0,
+    setTicketRequester: 0,
+    setTicketAssigned: 0,
+  },
+};
+
 function escapeHtml(str: string | null | undefined): string {
   const s = String(str ?? "").trim();
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -57,31 +75,54 @@ function buildFollowupHtml(info: LaudoInfoForGlpi): string {
 }
 
 async function initSession(login: string, password: string): Promise<string> {
-  const url = `${GLPI_BASE_URL}/initSession`;
-  const basic = Buffer.from(`${login}:${password}`).toString("base64");
+  const key = login;
+  const now = Date.now();
+  const cached = sessionCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    metrics.sessionCacheHits++;
+    return cached.token;
+  }
+  metrics.sessionCacheMisses++;
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Basic ${basic}`,
-  };
-  if (GLPI_APP_TOKEN) headers["App-Token"] = GLPI_APP_TOKEN;
-
-  const resp = await fetch(url, {
-    method: "GET",
-    headers,
-  });
-
-  if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(
-      `Falha ao autenticar no GLPI (${resp.status}): ${body || resp.statusText}`
-    );
+  const existing = pendingInit.get(key);
+  if (existing) {
+    metrics.pendingInitWaits++;
+    const token = await existing;
+    const c = sessionCache.get(key);
+    if (c && c.expiresAt > Date.now()) return c.token;
   }
 
-  const json = (await resp.json()) as { session_token?: string };
-  if (!json.session_token)
-    throw new Error("Session token não retornado pelo GLPI");
-  return json.session_token;
+  const promise = (async () => {
+    const url = `${GLPI_BASE_URL}/initSession`;
+    const basic = Buffer.from(`${login}:${password}`).toString("base64");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Basic ${basic}`,
+    };
+    if (GLPI_APP_TOKEN) headers["App-Token"] = GLPI_APP_TOKEN;
+
+    const resp = await fetch(url, { method: "GET", headers });
+    if (!resp.ok) {
+      const body = await resp.text();
+      throw new Error(
+        `Falha ao autenticar no GLPI (${resp.status}): ${body || resp.statusText}`
+      );
+    }
+    const json = (await resp.json()) as { session_token?: string };
+    if (!json.session_token) throw new Error("Session token não retornado pelo GLPI");
+    const token = json.session_token;
+    sessionCache.set(key, { token, expiresAt: Date.now() + SESSION_TTL_MS });
+    metrics.initSessions++;
+    return token;
+  })();
+
+  pendingInit.set(key, promise);
+  try {
+    const token = await promise;
+    return token;
+  } finally {
+    pendingInit.delete(key);
+  }
 }
 
 export async function createTicketFollowup(
@@ -90,12 +131,12 @@ export async function createTicketFollowup(
   tickets_id: number,
   info: LaudoInfoForGlpi
 ): Promise<{ id?: number; raw: any }> {
-  const sessionToken = await initSession(username, password);
+  let sessionToken = await initSession(username, password);
 
   const contentHtml = buildFollowupHtml(info);
   const url = `${GLPI_BASE_URL}/TicketFollowup`;
 
-  const resp = await fetch(url, {
+  let resp = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -110,6 +151,26 @@ export async function createTicketFollowup(
       },
     }),
   });
+  if (resp.status === 401) {
+    metrics.retries401.followup++;
+    sessionCache.delete(username);
+    sessionToken = await initSession(username, password);
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "App-Token": GLPI_APP_TOKEN,
+        "Session-Token": sessionToken,
+      },
+      body: JSON.stringify({
+        input: {
+          tickets_id,
+          content: contentHtml,
+          is_private: 0,
+        },
+      }),
+    });
+  }
 
   const raw = await resp.json().catch(async () => await resp.text());
   if (!resp.ok) {
@@ -132,7 +193,7 @@ export async function createTicketFollowupWithHeader(
   info: LaudoInfoForGlpi,
   relacao?: RelacaoHeader
 ): Promise<{ id?: number; raw: any }> {
-  const sessionToken = await initSession(username, password);
+  let sessionToken = await initSession(username, password);
 
   const headerHtml = relacao
     ? `<h3>Relacionamento com chamado existente</h3>` +
@@ -149,7 +210,7 @@ export async function createTicketFollowupWithHeader(
   const contentHtml = headerHtml + buildFollowupHtml(info);
   const url = `${GLPI_BASE_URL}/TicketFollowup`;
 
-  const resp = await fetch(url, {
+  let resp = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -164,6 +225,26 @@ export async function createTicketFollowupWithHeader(
       },
     }),
   });
+  if (resp.status === 401) {
+    metrics.retries401.followupHeader++;
+    sessionCache.delete(username);
+    sessionToken = await initSession(username, password);
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "App-Token": GLPI_APP_TOKEN,
+        "Session-Token": sessionToken,
+      },
+      body: JSON.stringify({
+        input: {
+          tickets_id,
+          content: contentHtml,
+          is_private: 0,
+        },
+      }),
+    });
+  }
 
   const raw = await resp.json().catch(async () => await resp.text());
   if (!resp.ok) {
@@ -192,7 +273,7 @@ export async function createTicket(
     grupoId?: number | null;
   }
 ): Promise<{ id?: number; raw: any }> {
-  const sessionToken = await initSession(username, password);
+  let sessionToken = await initSession(username, password);
 
   const contentHtml = buildFollowupHtml(info);
   const defaultName =
@@ -219,7 +300,7 @@ export async function createTicket(
   if (relacao?.grupoId) inputPayload["groups_id_assign"] = relacao.grupoId;
 
   const url = `${GLPI_BASE_URL}/Ticket`;
-  const resp = await fetch(url, {
+  let resp = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -228,6 +309,20 @@ export async function createTicket(
     },
     body: JSON.stringify({ input: inputPayload }),
   });
+  if (resp.status === 401) {
+    metrics.retries401.createTicket++;
+    sessionCache.delete(username);
+    sessionToken = await initSession(username, password);
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "App-Token": GLPI_APP_TOKEN,
+        "Session-Token": sessionToken,
+      },
+      body: JSON.stringify({ input: inputPayload }),
+    });
+  }
 
   const raw = await resp.json().catch(async () => await resp.text());
   if (!resp.ok) {
@@ -250,9 +345,9 @@ export async function linkTickets(
   tickets_id_2: number,
   link: number = 1
 ): Promise<any> {
-  const sessionToken = await initSession(username, password);
+  let sessionToken = await initSession(username, password);
   const url = `${GLPI_BASE_URL}/Ticket_Ticket`;
-  const resp = await fetch(url, {
+  let resp = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -263,6 +358,22 @@ export async function linkTickets(
       input: { tickets_id_1, tickets_id_2, link },
     }),
   });
+  if (resp.status === 401) {
+    metrics.retries401.linkTickets++;
+    sessionCache.delete(username);
+    sessionToken = await initSession(username, password);
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "App-Token": GLPI_APP_TOKEN,
+        "Session-Token": sessionToken,
+      },
+      body: JSON.stringify({
+        input: { tickets_id_1, tickets_id_2, link },
+      }),
+    });
+  }
   const raw = await resp.json().catch(async () => await resp.text());
   if (!resp.ok) {
     throw new Error(
@@ -289,10 +400,10 @@ export async function setTicketRequester(
   users_id: number,
   type: number = 1
 ): Promise<any> {
-  const sessionToken = await initSession(username, password);
+  let sessionToken = await initSession(username, password);
   const url = `${GLPI_BASE_URL}/Ticket_User`;
 
-  const resp = await fetch(url, {
+  let resp = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -307,6 +418,26 @@ export async function setTicketRequester(
       },
     }),
   });
+  if (resp.status === 401) {
+    metrics.retries401.setTicketRequester++;
+    sessionCache.delete(username);
+    sessionToken = await initSession(username, password);
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "App-Token": GLPI_APP_TOKEN,
+        "Session-Token": sessionToken,
+      },
+      body: JSON.stringify({
+        input: {
+          tickets_id,
+          users_id,
+          type,
+        },
+      }),
+    });
+  }
 
   const raw = await resp.json().catch(async () => await resp.text());
   if (!resp.ok) {
@@ -325,10 +456,10 @@ export async function setTicketAssigned(
   users_id: number,
   type: number = 2
 ): Promise<any> {
-  const sessionToken = await initSession(username, password);
+  let sessionToken = await initSession(username, password);
   const url = `${GLPI_BASE_URL}/Ticket_User`;
 
-  const resp = await fetch(url, {
+  let resp = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -343,6 +474,26 @@ export async function setTicketAssigned(
       },
     }),
   });
+  if (resp.status === 401) {
+    metrics.retries401.setTicketAssigned++;
+    sessionCache.delete(username);
+    sessionToken = await initSession(username, password);
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "App-Token": GLPI_APP_TOKEN,
+        "Session-Token": sessionToken,
+      },
+      body: JSON.stringify({
+        input: {
+          tickets_id,
+          users_id,
+          type,
+        },
+      }),
+    });
+  }
 
   const raw = await resp.json().catch(async () => await resp.text());
   if (!resp.ok) {
@@ -353,4 +504,55 @@ export async function setTicketAssigned(
     );
   }
   return raw;
+}
+export function getGlpiMetrics() {
+  return {
+    initSessions: metrics.initSessions,
+    sessionCacheHits: metrics.sessionCacheHits,
+    sessionCacheMisses: metrics.sessionCacheMisses,
+    pendingInitWaits: metrics.pendingInitWaits,
+    retries401: { ...metrics.retries401 },
+    sessionCacheSize: sessionCache.size,
+  };
+}
+
+export function resetGlpiMetrics() {
+  metrics.initSessions = 0;
+  metrics.sessionCacheHits = 0;
+  metrics.sessionCacheMisses = 0;
+  metrics.pendingInitWaits = 0;
+  metrics.retries401.followup = 0;
+  metrics.retries401.followupHeader = 0;
+  metrics.retries401.createTicket = 0;
+  metrics.retries401.linkTickets = 0;
+  metrics.retries401.setTicketRequester = 0;
+  metrics.retries401.setTicketAssigned = 0;
+}
+
+export async function killGlpiSession(login: string): Promise<{ success: boolean; status?: number; raw?: any }> {
+  const cached = sessionCache.get(login);
+  if (!cached) return { success: false };
+  const url = `${GLPI_BASE_URL}/killSession`;
+  const resp = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "App-Token": GLPI_APP_TOKEN,
+      "Session-Token": cached.token,
+    },
+  });
+  sessionCache.delete(login);
+  const raw = await resp.json().catch(async () => await resp.text());
+  return { success: resp.ok, status: resp.status, raw };
+}
+
+export function clearGlpiSessionCache(login?: string): { cleared: number } {
+  if (login) {
+    const had = sessionCache.has(login) ? 1 : 0;
+    sessionCache.delete(login);
+    return { cleared: had };
+  }
+  const n = sessionCache.size;
+  sessionCache.clear();
+  return { cleared: n };
 }
